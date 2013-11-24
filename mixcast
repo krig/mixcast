@@ -1,0 +1,91 @@
+#!/usr/bin/env python
+# mixcast - a podcast mixing utility
+
+import os
+import sys
+import subprocess
+import ConfigParser
+import shlex
+import atexit
+
+_processed_counter = 0
+_max_voicetrack_length = -1
+
+#_compand = ['compand', '.1,.2', '-inf,-50.1,-inf,-50,-50', '0', '-90', '.1']
+_compand = ['compand', '0.3,1', '6:-70,-60,-20', '-5', '-90']
+_norm = ['norm']
+
+def next_tempfilename():
+    global _processed_counter
+    _processed_counter += 1
+    return 'processed_%d.wav' % (_processed_counter)
+
+def process_voice_track(cfg, track):
+    global _max_voicetrack_length
+    print "processing %s..." % (track)
+    olen = int(subprocess.check_output(['mp3info', '-p', '%S', track]))
+    if olen > _max_voicetrack_length:
+        _max_voicetrack_length = olen
+        print "length: %ds" % (olen)
+    output_filename = next_tempfilename()
+    subprocess.check_call(['sox', track, output_filename] + _compand + _norm)
+    return output_filename
+
+def process_outro(cfg):
+    outro = os.path.expanduser(cfg.get('input', 'outro'))
+    print "processing outro %s..." % (outro)
+    outro_offset = cfg.getfloat('input', 'outro_offset')
+    output_filename = next_tempfilename()
+    mkoffset = _max_voicetrack_length + outro_offset
+    subprocess.check_call(['sox', outro, output_filename, 'pad', '%s@0' % (mkoffset)])
+    return output_filename
+
+def mixdown(cfg, input_files):
+    outp = next_tempfilename()
+    print "mixing %s..." % (", ".join(input_files))
+    cmd = ['sox', '--show-progress', '--norm', '-m'] + input_files + [outp]
+    subprocess.check_call(cmd)
+    return outp
+
+def encode_mp3(cfg, mixdown_wav):
+    cfg.set('lame', 'input', mixdown_wav)
+    cfg.set('lame', 'output', os.path.expanduser(cfg.get('output', 'file')))
+    cmdline = shlex.split(cfg.get('lame', 'commandline'))
+    print "cmdline: ", cmdline
+    print "encoding %s..." % (cfg.get('lame', 'output'))
+    subprocess.check_call(cmdline)
+
+def mixcast(cfg):
+    tracks = [os.path.expanduser(p) for p in shlex.split(cfg.get('input', 'tracks'))]
+
+    processed_tracks = [process_voice_track(cfg, track) for track in tracks]
+    processed_outro = process_outro(cfg)
+    md = mixdown(cfg, processed_tracks + [processed_outro])
+    encode_mp3(cfg, md)
+
+def usage():
+    print """usage: mixcast <input-file>
+
+    See example input file for more information.
+
+    http://kodsnack.se
+    """
+    sys.exit(1)
+
+def cleanup_tempfiles():
+    pass
+
+def main():
+    if len(sys.argv) < 2 or not os.path.isfile(sys.argv[1]):
+        usage()
+
+    atexit.register(cleanup_tempfiles)
+
+    cfg = ConfigParser.SafeConfigParser()
+    cfg.read(sys.argv[1:])
+
+    #encode_mp3(cfg, 'processed_5.wav')
+    mixcast(cfg)
+
+if __name__ == "__main__":
+    main()
