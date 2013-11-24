@@ -8,12 +8,25 @@ import ConfigParser
 import shlex
 import atexit
 
+# needs:
+# - sox
+# - soxi
+# - mp3info
+# - lame
+# - python-mutagen
+
 _processed_counter = 0
 _max_voicetrack_length = -1
 
-#_compand = ['compand', '.1,.2', '-inf,-50.1,-inf,-50,-50', '0', '-90', '.1']
-_compand = ['compand', '0.3,1', '6:-70,-60,-20', '-5', '-90']
-_norm = ['norm']
+_compand = ['compand', '.1,.2', '-inf,-50.1,-inf,-50,-50', '0', '-90', '.1']
+#_compand = ['compand', '0.3,1', '6:-70,-60,-20', '-5', '-90']
+_norm = ['norm', '-0.05']
+
+def duration(filename):
+    if filename.endswith('.mp3'):
+        return float(subprocess.check_output(['mp3info', '-p', '%S', filename]))
+    else:
+        return float(subprocess.check_output(['soxi', '-D', filename]))
 
 def next_tempfilename():
     global _processed_counter
@@ -23,6 +36,7 @@ def next_tempfilename():
 def process_voice_track(cfg, track):
     global _max_voicetrack_length
     print "processing %s..." % (track)
+    olen = duration(track)
     olen = int(subprocess.check_output(['mp3info', '-p', '%S', track]))
     if olen > _max_voicetrack_length:
         _max_voicetrack_length = olen
@@ -43,17 +57,55 @@ def process_outro(cfg):
 def mixdown(cfg, input_files):
     outp = next_tempfilename()
     print "mixing %s..." % (", ".join(input_files))
-    cmd = ['sox', '--show-progress', '--norm', '-m'] + input_files + [outp]
+    cmd = ['sox', '-m'] + input_files + [outp, 'gain', '-n']
     subprocess.check_call(cmd)
     return outp
 
 def encode_mp3(cfg, mixdown_wav):
     cfg.set('lame', 'input', mixdown_wav)
-    cfg.set('lame', 'output', os.path.expanduser(cfg.get('output', 'file')))
+    outp = os.path.expanduser(cfg.get('output', 'file'))
+    cfg.set('lame', 'output', outp)
     cmdline = shlex.split(cfg.get('lame', 'commandline'))
     print "cmdline: ", cmdline
-    print "encoding %s..." % (cfg.get('lame', 'output'))
+    print "encoding %s..." % (outp)
     subprocess.check_call(cmdline)
+    return outp
+
+def add_album_art(cfg, filename):
+    from mutagen.mp3 import MP3
+    from mutagen.id3 import ID3, APIC, error
+
+    print "injecting album art..."
+    artfile = os.path.expanduser(cfg.get('lame', 'album_art'))
+
+    if not os.path.isfile(artfile):
+        raise IOError("file not found: " + artfile)
+    if not os.path.isfile(filename):
+        raise IOError("file not found: " + filename)
+
+    audio = MP3(filename, ID3=ID3)
+
+    mimemap = {
+        '.jpg': 'image/jpeg',
+        '.png': 'image/png'
+    }
+
+    # add ID3 tag if it doesn't exist
+    try:
+        audio.add_tags()
+    except error:
+        pass
+
+    audio.tags.add(
+        APIC(
+            encoding=3, # 3 is for utf-8
+            mime=mimemap[os.path.splitext(artfile)[1]], # image/jpeg or image/png
+            type=3, # 3 is for the cover image
+            desc=u'Cover',
+            data=open(artfile).read()
+        )
+    )
+    audio.save()
 
 def mixcast(cfg):
     tracks = [os.path.expanduser(p) for p in shlex.split(cfg.get('input', 'tracks'))]
@@ -61,7 +113,7 @@ def mixcast(cfg):
     processed_tracks = [process_voice_track(cfg, track) for track in tracks]
     processed_outro = process_outro(cfg)
     md = mixdown(cfg, processed_tracks + [processed_outro])
-    encode_mp3(cfg, md)
+    add_album_art(cfg, encode_mp3(cfg, md))
 
 def usage():
     print """usage: mixcast <input-file>
@@ -84,6 +136,7 @@ def main():
     cfg = ConfigParser.SafeConfigParser()
     cfg.read(sys.argv[1:])
 
+    #add_album_art(cfg, 'kodsnack.mp3')
     #encode_mp3(cfg, 'processed_5.wav')
     mixcast(cfg)
 
