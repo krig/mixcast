@@ -2,7 +2,7 @@
 
 Command line podcast mixing tool
 
-Uses `sox` and `id3v2` to mix, create mp3 and inject data
+Uses `sox`, `mp3info`, `lame` and `mutagen` to mix, create mp3 and inject data
 
 * Inputs:
 
@@ -21,7 +21,4 @@ Uses `sox` and `id3v2` to mix, create mp3 and inject data
 * Outputs:
 
 - an .mp3
-
-- uploads the mp3 to libsyn over sftp (use keyring to store login
-  info?)
 
